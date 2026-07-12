@@ -1,13 +1,19 @@
 """
-Agent 03 — Multi-Source Job Scraper Agent (BeautifulSoup + Groq Enrichment)
+Agent 03 — Multi-Source Job Scraper Agent (public APIs + BeautifulSoup + Groq Enrichment)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Scrapes jobs from:
-  • RemoteOK  — JSON API (most reliable, no CAPTCHA)
-  • Wellfound — HTML + BeautifulSoup
-  • Indeed    — HTML + BeautifulSoup
-  • HN Who's Hiring — Hacker News API + BS4
+Default sources (all verified working without auth, 2026-07):
+  • LinkedIn  — jobs-guest API endpoint (real keyword-matched cards)
+  • Remotive  — public JSON API
+  • Arbeitnow — public JSON API
+  • Jobicy    — public JSON API
+  • The Muse  — public JSON API
+  • RemoteOK  — public JSON API
+  • HN Who's Hiring — HN Algolia API
+  • Web Search — Yahoo results limited to Greenhouse/Lever/Ashby/Workday boards
 
-After scraping, uses Groq to:
+Opt-in (currently 403-block anonymous scraping): Indeed, Wellfound.
+
+After scraping, uses Groq (if configured) to:
   • Expand sparse job descriptions into full structured JDs
   • Classify apply method (email / form / easy-apply)
   • Extract key requirements for scoring
@@ -23,12 +29,11 @@ from loguru import logger
 
 import aiohttp
 from bs4 import BeautifulSoup
-from groq import Groq
 
 from core.config import get_settings
+from core.groq_llm import chat_json, GroqNotConfiguredError
 
 settings = get_settings()
-groq_client = Groq(api_key=settings.groq_api_key)
 
 # ─── Rotation headers to reduce bot detection ───
 HEADERS_POOL = [
@@ -43,6 +48,18 @@ def _next_headers() -> dict:
     h = HEADERS_POOL[_header_idx % len(HEADERS_POOL)]
     _header_idx += 1
     return h
+
+
+def _matches_keywords(text: str, keywords: list[str]) -> bool:
+    """True if any keyword matches: exact phrase, or all its words present."""
+    text = text.lower()
+    for kw in keywords:
+        kw = kw.lower().strip()
+        if not kw:
+            continue
+        if kw in text or all(w in text for w in kw.split()):
+            return True
+    return False
 
 
 # ─── Unified Job Schema ───
@@ -111,8 +128,7 @@ async def enrich_job_with_groq(job: dict) -> dict:
         return job  # Already has enough content, skip API call
 
     try:
-        response = groq_client.chat.completions.create(
-            model=settings.groq_model,
+        enriched = chat_json(
             messages=[{
                 "role": "user",
                 "content": ENRICH_PROMPT.format(
@@ -124,12 +140,9 @@ async def enrich_job_with_groq(job: dict) -> dict:
                 )
             }],
             temperature=0.3,
-            max_tokens=600,
+            max_tokens=800,
+            retries=0,
         )
-        content = response.choices[0].message.content.strip()
-        content = re.sub(r"^```(?:json)?\n?", "", content)
-        content = re.sub(r"\n?```$", "", content)
-        enriched = json.loads(content)
 
         job["jd_text"] = enriched.get("full_jd", job["jd_text"])
         job["required_skills"] = enriched.get("required_skills", [])
@@ -139,6 +152,8 @@ async def enrich_job_with_groq(job: dict) -> dict:
         if not job["salary"] and enriched.get("estimated_salary", "Unknown") != "Unknown":
             job["salary"] = enriched.get("estimated_salary", "")
         job["groq_enriched"] = True
+    except GroqNotConfiguredError:
+        logger.debug("[Agent 03] Groq enrichment skipped: no API key configured")
     except Exception as e:
         logger.debug(f"[Agent 03] Groq enrichment skipped for '{job.get('title')}': {e}")
 
@@ -151,7 +166,6 @@ async def enrich_job_with_groq(job: dict) -> dict:
 async def scrape_remoteok(keywords: list[str], max_jobs: int = 40) -> list[dict]:
     """Scrape RemoteOK's public JSON API — no auth, no CAPTCHA."""
     jobs = []
-    keyword_lower = [k.lower() for k in keywords]
     try:
         connector = aiohttp.TCPConnector(ssl=False)
         async with aiohttp.ClientSession(connector=connector) as session:
@@ -174,8 +188,8 @@ async def scrape_remoteok(keywords: list[str], max_jobs: int = 40) -> list[dict]
             item_tags = " ".join(item.get("tags", [])).lower()
             item_desc = BeautifulSoup(item.get("description", ""), "html.parser").get_text(" ", strip=True)
 
-            search_text = f"{title} {item_tags} {item_desc}".lower()
-            if not any(kw in search_text for kw in keyword_lower):
+            search_text = f"{title} {item_tags} {item_desc}"
+            if not _matches_keywords(search_text, keywords):
                 continue
 
             job = make_job(
@@ -210,7 +224,6 @@ async def scrape_remoteok(keywords: list[str], max_jobs: int = 40) -> list[dict]
 async def scrape_hn_hiring(keywords: list[str], max_jobs: int = 30) -> list[dict]:
     """Parse the monthly HN 'Who's Hiring' thread via HN Algolia API."""
     jobs = []
-    keyword_lower = [k.lower() for k in keywords]
     try:
         # Search for the latest "Who's Hiring" thread using search_by_date and filtering by whoishiring author
         search_url = "https://hn.algolia.com/api/v1/search_by_date?query=Ask+HN+Who+is+hiring&tags=story,author_whoishiring&hitsPerPage=1"
@@ -241,7 +254,7 @@ async def scrape_hn_hiring(keywords: list[str], max_jobs: int = 30) -> list[dict
                 continue
 
             # Filter by keyword
-            if not any(kw in text.lower() for kw in keyword_lower):
+            if not _matches_keywords(text, keywords):
                 continue
 
             # Extract company name (usually first word before | or at)
@@ -485,25 +498,34 @@ async def scrape_wellfound(keywords: list[str], location: str = "Remote", max_jo
 #  SCRAPER 5: LinkedIn (HTML + BeautifulSoup)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 async def scrape_linkedin(keywords: list[str], location: str = "Remote", max_jobs: int = 30, sort_by: str = "date") -> list[dict]:
-    """Scrape LinkedIn public search results page using BeautifulSoup."""
+    """
+    Scrape LinkedIn via the public *jobs-guest* API endpoint.
+
+    The regular /jobs/search page served to anonymous clients is a generic,
+    sponsor-dominated page (mostly Infosys/consultancy cards) that ignores the
+    keyword — the guest API endpoint returns real keyword-matched cards.
+    """
     jobs = []
     for keyword in keywords[:2]:
         try:
             q = keyword.replace(" ", "%20")
             l = location.replace(" ", "%20")
-            
-            # Determine how many pages to fetch. LinkedIn has 25 results per page.
+
+            # Guest API pages ~10 cards per request
             jobs_per_keyword = max_jobs // min(len(keywords[:2]), 2)
-            pages = max(1, (jobs_per_keyword + 24) // 25)
-            
+            pages = max(1, (jobs_per_keyword + 9) // 10)
+
             for page in range(pages):
-                start_val = page * 25
+                start_val = page * 10
                 sort_param = "&sortBy=DD" if sort_by == "date" else ""
                 # f_TPR=r2592000 is 1 month in seconds
                 date_filter = "&f_TPR=r2592000" if sort_by == "date" else ""
-                
-                url = f"https://www.linkedin.com/jobs/search?keywords={q}&location={l}&start={start_val}{sort_param}{date_filter}"
-                logger.info(f"[LinkedIn] Fetching page {page+1} (start={start_val}) for '{keyword}': {url}")
+
+                url = (
+                    "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
+                    f"?keywords={q}&location={l}&start={start_val}{sort_param}{date_filter}"
+                )
+                logger.info(f"[LinkedIn] Fetching page {page+1} (start={start_val}) for '{keyword}'")
                 
                 async with aiohttp.ClientSession(headers=_next_headers()) as session:
                     async with session.get(url, timeout=aiohttp.ClientTimeout(total=20)) as resp:
@@ -729,6 +751,200 @@ async def scrape_search_engine(keywords: list[str], location: str = "Remote", ma
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  SCRAPER 7: Remotive (public JSON API — no key, no CAPTCHA)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def scrape_remotive(keywords: list[str], max_jobs: int = 30) -> list[dict]:
+    """Remotive public API — remote jobs across thousands of companies."""
+    jobs = []
+    try:
+        async with aiohttp.ClientSession() as session:
+            for keyword in keywords[:2]:
+                params = {"search": keyword, "limit": str(max_jobs)}
+                async with session.get(
+                    "https://remotive.com/api/remote-jobs",
+                    params=params,
+                    timeout=aiohttp.ClientTimeout(total=20),
+                ) as resp:
+                    if resp.status != 200:
+                        logger.warning(f"[Remotive] HTTP {resp.status} for '{keyword}'")
+                        continue
+                    data = await resp.json(content_type=None)
+
+                for item in data.get("jobs", []):
+                    desc = BeautifulSoup(item.get("description", ""), "html.parser").get_text(" ", strip=True)
+                    jobs.append(make_job(
+                        title=item.get("title", ""),
+                        company=item.get("company_name", "Unknown"),
+                        location=item.get("candidate_required_location", "Remote"),
+                        jd_text=desc[:2000],
+                        apply_url=item.get("url", ""),
+                        apply_method="form",
+                        source="remotive",
+                        salary=item.get("salary", ""),
+                        remote=True,
+                        job_type=item.get("job_type", "full-time") or "full-time",
+                        tags=item.get("tags", []),
+                        posted_date=item.get("publication_date", ""),
+                    ))
+                    if len(jobs) >= max_jobs:
+                        break
+                if len(jobs) >= max_jobs:
+                    break
+        logger.success(f"[Remotive] Scraped {len(jobs)} jobs")
+    except Exception as e:
+        logger.error(f"[Remotive] Failed: {type(e).__name__}: {e}")
+    return jobs
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  SCRAPER 8: Arbeitnow (public JSON API)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def scrape_arbeitnow(keywords: list[str], max_jobs: int = 30) -> list[dict]:
+    """Arbeitnow job board API — tech jobs (many remote/EU), keyword-filtered client-side."""
+    jobs = []
+    try:
+        async with aiohttp.ClientSession() as session:
+            for page in range(1, 4):  # ~100 postings/page
+                async with session.get(
+                    f"https://www.arbeitnow.com/api/job-board-api?page={page}",
+                    timeout=aiohttp.ClientTimeout(total=20),
+                ) as resp:
+                    if resp.status != 200:
+                        break
+                    data = await resp.json(content_type=None)
+
+                for item in data.get("data", []):
+                    desc = BeautifulSoup(item.get("description", ""), "html.parser").get_text(" ", strip=True)
+                    search_text = f"{item.get('title', '')} {' '.join(item.get('tags', []))} {desc}"
+                    if not _matches_keywords(search_text, keywords):
+                        continue
+                    created = item.get("created_at")
+                    posted = (
+                        datetime.utcfromtimestamp(created).isoformat()
+                        if isinstance(created, (int, float)) else None
+                    )
+                    jobs.append(make_job(
+                        title=item.get("title", ""),
+                        company=item.get("company_name", "Unknown"),
+                        location=item.get("location", "") or "Remote",
+                        jd_text=desc[:2000],
+                        apply_url=item.get("url", ""),
+                        apply_method="form",
+                        source="arbeitnow",
+                        remote=bool(item.get("remote")),
+                        job_type=(item.get("job_types") or ["full-time"])[0].lower(),
+                        tags=item.get("tags", []),
+                        posted_date=posted,
+                    ))
+                    if len(jobs) >= max_jobs:
+                        break
+                if len(jobs) >= max_jobs:
+                    break
+        logger.success(f"[Arbeitnow] Scraped {len(jobs)} jobs")
+    except Exception as e:
+        logger.error(f"[Arbeitnow] Failed: {type(e).__name__}: {e}")
+    return jobs
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  SCRAPER 9: Jobicy (public JSON API)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def scrape_jobicy(keywords: list[str], max_jobs: int = 30) -> list[dict]:
+    """Jobicy remote-jobs API — supports a tag (keyword) filter."""
+    jobs = []
+    try:
+        async with aiohttp.ClientSession() as session:
+            for keyword in keywords[:2]:
+                params = {"count": str(min(max_jobs, 50)), "tag": keyword}
+                async with session.get(
+                    "https://jobicy.com/api/v2/remote-jobs",
+                    params=params,
+                    timeout=aiohttp.ClientTimeout(total=20),
+                ) as resp:
+                    if resp.status != 200:
+                        logger.warning(f"[Jobicy] HTTP {resp.status} for '{keyword}'")
+                        continue
+                    data = await resp.json(content_type=None)
+
+                for item in data.get("jobs", []):
+                    desc = BeautifulSoup(item.get("jobDescription", "") or item.get("jobExcerpt", ""), "html.parser").get_text(" ", strip=True)
+                    sal_min, sal_max = item.get("annualSalaryMin"), item.get("annualSalaryMax")
+                    salary = f"{item.get('salaryCurrency', 'USD')} {sal_min}–{sal_max}" if sal_min and sal_max else ""
+                    job_industry = item.get("jobIndustry") or []
+                    jobs.append(make_job(
+                        title=item.get("jobTitle", ""),
+                        company=item.get("companyName", "Unknown"),
+                        location=item.get("jobGeo", "Remote"),
+                        jd_text=desc[:2000],
+                        apply_url=item.get("url", ""),
+                        apply_method="form",
+                        source="jobicy",
+                        salary=salary,
+                        remote=True,
+                        tags=job_industry if isinstance(job_industry, list) else [],
+                        posted_date=item.get("pubDate", ""),
+                    ))
+                    if len(jobs) >= max_jobs:
+                        break
+                if len(jobs) >= max_jobs:
+                    break
+        logger.success(f"[Jobicy] Scraped {len(jobs)} jobs")
+    except Exception as e:
+        logger.error(f"[Jobicy] Failed: {type(e).__name__}: {e}")
+    return jobs
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  SCRAPER 10: The Muse (public JSON API)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def scrape_themuse(keywords: list[str], location: str = "Remote", max_jobs: int = 30) -> list[dict]:
+    """The Muse public jobs API — big-company postings, keyword-filtered client-side."""
+    jobs = []
+    try:
+        async with aiohttp.ClientSession() as session:
+            for page in range(1, 5):  # 20 postings/page
+                params = {"page": str(page)}
+                if location and location.lower() == "remote":
+                    params["location"] = "Flexible / Remote"
+                async with session.get(
+                    "https://www.themuse.com/api/public/jobs",
+                    params=params,
+                    timeout=aiohttp.ClientTimeout(total=20),
+                ) as resp:
+                    if resp.status != 200:
+                        break
+                    data = await resp.json(content_type=None)
+
+                for item in data.get("results", []):
+                    desc = BeautifulSoup(item.get("contents", ""), "html.parser").get_text(" ", strip=True)
+                    title = item.get("name", "")
+                    search_text = f"{title} {desc}"
+                    if not _matches_keywords(search_text, keywords):
+                        continue
+                    locations = ", ".join(l.get("name", "") for l in item.get("locations", [])) or location
+                    jobs.append(make_job(
+                        title=title,
+                        company=(item.get("company") or {}).get("name", "Unknown"),
+                        location=locations,
+                        jd_text=desc[:2000],
+                        apply_url=(item.get("refs") or {}).get("landing_page", ""),
+                        apply_method="form",
+                        source="themuse",
+                        remote="remote" in locations.lower() or "flexible" in locations.lower(),
+                        tags=[c.get("name", "") for c in item.get("categories", [])],
+                        posted_date=item.get("publication_date", ""),
+                    ))
+                    if len(jobs) >= max_jobs:
+                        break
+                if len(jobs) >= max_jobs:
+                    break
+        logger.success(f"[TheMuse] Scraped {len(jobs)} jobs")
+    except Exception as e:
+        logger.error(f"[TheMuse] Failed: {type(e).__name__}: {e}")
+    return jobs
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  GROQ FALLBACK — Generate realistic jobs when scraping yields 0
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 GENERATE_JOBS_PROMPT = """Generate exactly {count} realistic job postings for "{keywords}" roles.
@@ -751,8 +967,7 @@ async def generate_jobs_with_groq(keywords: list[str], location: str, count: int
         if batch_count <= 0:
             break
         try:
-            response = groq_client.chat.completions.create(
-                model=settings.groq_model,
+            raw_jobs = chat_json(
                 messages=[{
                     "role": "user",
                     "content": GENERATE_JOBS_PROMPT.format(
@@ -761,17 +976,9 @@ async def generate_jobs_with_groq(keywords: list[str], location: str, count: int
                     )
                 }],
                 temperature=0.6,
-                max_tokens=1500,
+                max_tokens=2000,
+                json_mode=False,  # prompt asks for a bare JSON array
             )
-            content = response.choices[0].message.content.strip()
-            content = re.sub(r"^```(?:json)?\n?", "", content)
-            content = re.sub(r"\n?```$", "", content)
-
-            # Ensure the array is closed (handle truncation)
-            if content.count("[") > content.count("]"):
-                content = content.rstrip("," + " \n") + "]]".replace("]]", "]")
-
-            raw_jobs = json.loads(content)
             if not isinstance(raw_jobs, list):
                 raw_jobs = [raw_jobs]
 
@@ -838,6 +1045,14 @@ async def enrich_batch(jobs: list[dict], max_enrich: int = 20) -> list[dict]:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  MAIN ENTRY POINT
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# All platforms that actually work without auth/CAPTCHA (2026-07 verified).
+# indeed/wellfound are kept as opt-in: both currently hard-block plain HTTP (403).
+DEFAULT_PLATFORMS = [
+    "linkedin", "remotive", "arbeitnow", "jobicy", "themuse",
+    "remoteok", "hn", "search_engine",
+]
+
+
 async def run_async(
     keywords: list[str] = None,
     location: str = "Remote",
@@ -845,6 +1060,7 @@ async def run_async(
     max_jobs: int = 100,
     enrich: bool = True,
     sort_by: str = "date",
+    allow_synthetic: bool = False,
 ) -> dict:
     """
     Async scrape across all platforms + Groq enrichment.
@@ -852,16 +1068,19 @@ async def run_async(
     Args:
         keywords: Search terms (e.g. ["python developer", "backend engineer"])
         location: Target location ("Remote", "New York", etc.)
-        platforms: Which to scrape (["linkedin", "search_engine", "remoteok", "hn", "indeed", "wellfound"])
+        platforms: Which to scrape (see DEFAULT_PLATFORMS; also "indeed", "wellfound")
         max_jobs: Max total jobs to return
         enrich: Whether to use Groq to expand sparse JDs
         sort_by: How to sort ("date" or "score")
+        allow_synthetic: If True, generate Groq synthetic jobs when scraping
+            yields almost nothing. Off by default — synthetic listings are not
+            real openings and must never silently mix with scraped jobs.
 
     Returns:
         dict with jobs list, counts, sources breakdown
     """
     keywords = keywords or ["software engineer", "python developer"]
-    platforms = platforms or ["linkedin", "search_engine", "remoteok", "hn", "indeed", "wellfound"]
+    platforms = platforms or DEFAULT_PLATFORMS
     per_platform = max(max_jobs // len(platforms), 15)
 
     logger.info(f"[Agent 03] Scraping {platforms} | keywords={keywords} | location={location} | sort_by={sort_by}")
@@ -869,6 +1088,14 @@ async def run_async(
     tasks = []
     if "linkedin" in platforms:
         tasks.append(("linkedin", scrape_linkedin(keywords, location, per_platform, sort_by)))
+    if "remotive" in platforms:
+        tasks.append(("remotive", scrape_remotive(keywords, per_platform)))
+    if "arbeitnow" in platforms:
+        tasks.append(("arbeitnow", scrape_arbeitnow(keywords, per_platform)))
+    if "jobicy" in platforms:
+        tasks.append(("jobicy", scrape_jobicy(keywords, per_platform)))
+    if "themuse" in platforms:
+        tasks.append(("themuse", scrape_themuse(keywords, location, per_platform)))
     if "search_engine" in platforms or "web_search" in platforms:
         tasks.append(("search_engine", scrape_search_engine(keywords, location, per_platform)))
     if "remoteok" in platforms:
@@ -897,8 +1124,8 @@ async def run_async(
     unique = deduplicate(all_jobs)
     logger.info(f"[Agent 03] {len(all_jobs)} total → {len(unique)} unique after dedup")
 
-    # ── Groq fallback: generate synthetic jobs if scrapers returned too few ──
-    if len(unique) < 5:
+    # ── Optional Groq fallback: synthetic jobs only when explicitly enabled ──
+    if allow_synthetic and len(unique) < 5:
         logger.warning(f"[Agent 03] Only {len(unique)} scraped — using Groq to generate synthetic jobs")
         synthetic = await generate_jobs_with_groq(keywords, location, max(10, max_jobs // 3))
         # Merge, deduplicate again
@@ -935,6 +1162,7 @@ async def run_async(
 
 
 def run(keywords: list[str] = None, location: str = "Remote",
-        platforms: list[str] = None, max_jobs: int = 100, enrich: bool = True, sort_by: str = "date") -> dict:
+        platforms: list[str] = None, max_jobs: int = 100, enrich: bool = True,
+        sort_by: str = "date", allow_synthetic: bool = False) -> dict:
     """Sync wrapper — safe to call from FastAPI BackgroundTasks."""
-    return asyncio.run(run_async(keywords, location, platforms, max_jobs, enrich, sort_by))
+    return asyncio.run(run_async(keywords, location, platforms, max_jobs, enrich, sort_by, allow_synthetic))

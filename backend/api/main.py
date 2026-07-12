@@ -223,7 +223,11 @@ async def delete_resume(request: Request, resume_id: str, token: dict = Depends(
 class ScrapeRequest(BaseModel):
     keywords: List[str] = ["software engineer", "python developer"]
     location: str = "Remote"
-    platforms: List[str] = ["wellfound", "indeed"]
+    # Verified-working public sources; "indeed"/"wellfound" are opt-in (both 403 anonymous scraping)
+    platforms: List[str] = [
+        "linkedin", "remotive", "arbeitnow", "jobicy", "themuse",
+        "remoteok", "hn", "search_engine",
+    ]
     max_jobs: int = 100
     sort_by: str = "date"
 
@@ -296,7 +300,8 @@ async def rewrite_resume(request: Request, req: RewriteRequest, token: dict = De
     )
 
     if result["status"] == "error":
-        raise HTTPException(status_code=500, detail=result["message"])
+        status_code = 503 if "GROQ_API_KEY" in result["message"] else 500
+        raise HTTPException(status_code=status_code, detail=result["message"])
 
     cache.set("ats", resume_hash, job_key, value=result, ttl=TTL_ATS_REWRITE)
     return result
@@ -323,7 +328,8 @@ async def generate_cover_letter(request: Request, req: RewriteRequest, variant: 
     )
 
     if result["status"] == "error":
-        raise HTTPException(status_code=500, detail=result["message"])
+        status_code = 503 if "GROQ_API_KEY" in result["message"] else 500
+        raise HTTPException(status_code=status_code, detail=result["message"])
 
     return result
 
@@ -687,7 +693,8 @@ async def generate_pdf(request: Request, req: RewriteRequest, token: dict = Depe
         {"title": req.job_title, "company": req.company, "jd_text": req.jd_text}
     )
     if rewrite.get("status") == "error":
-        raise HTTPException(status_code=500, detail=rewrite["message"])
+        status_code = 503 if "GROQ_API_KEY" in rewrite["message"] else 500
+        raise HTTPException(status_code=status_code, detail=rewrite["message"])
 
     # Generate PDF
     try:

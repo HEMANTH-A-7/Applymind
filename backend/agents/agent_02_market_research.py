@@ -3,16 +3,13 @@ Agent 02 — Market Research Agent
 Analyzes job market trends, salary bands, in-demand skills, and top hiring companies.
 """
 import json
-import re
 import asyncio
-import aiohttp
 from datetime import datetime
 from loguru import logger
-from groq import Groq
 from core.config import get_settings
+from core.groq_llm import chat_json, GroqNotConfiguredError
 
 settings = get_settings()
-client = Groq(api_key=settings.groq_api_key)
 
 MARKET_ANALYSIS_PROMPT = """You are a job market analyst AI. Generate a comprehensive, data-driven market analysis report for a job seeker.
 
@@ -71,8 +68,7 @@ async def run_async(role: str, location: str = "Remote", skills: list[str] = Non
     logger.info(f"[Agent 02] Running market research for: {role} in {location}")
 
     try:
-        response = client.chat.completions.create(
-            model=settings.groq_model,
+        market_data = chat_json(
             messages=[
                 {
                     "role": "user",
@@ -85,17 +81,14 @@ async def run_async(role: str, location: str = "Remote", skills: list[str] = Non
                 }
             ],
             temperature=0.4,
-            max_tokens=2000,
+            max_tokens=3000,
         )
-
-        content = response.choices[0].message.content.strip()
-        content = re.sub(r"^```(?:json)?\n?", "", content)
-        content = re.sub(r"\n?```$", "", content)
-        market_data = json.loads(content)
 
         logger.success(f"[Agent 02] Market report generated for '{role}'")
         return {"status": "success", "role": role, "location": location, **market_data}
 
+    except GroqNotConfiguredError as e:
+        return {"status": "error", "message": str(e)}
     except json.JSONDecodeError as e:
         logger.error(f"[Agent 02] JSON parse error: {e}")
         return {"status": "error", "message": f"Failed to parse market data: {e}"}

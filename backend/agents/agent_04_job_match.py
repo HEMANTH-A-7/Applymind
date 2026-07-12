@@ -4,16 +4,13 @@ Primary: TF-IDF cosine similarity for fast bulk scoring.
 Secondary: Groq-powered deep skill gap analysis for top matches.
 """
 import re
-import json
-import asyncio
 from typing import Optional
 import numpy as np
 from loguru import logger
-from groq import Groq
 from core.config import get_settings
+from core.groq_llm import chat_json
 
 settings = get_settings()
-groq_client = Groq(api_key=settings.groq_api_key)
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -132,8 +129,7 @@ def groq_deep_analysis(resume_json: dict, job: dict, base_score: int) -> dict:
         )
         jd_excerpt = f"{job.get('title')} | {job.get('jd_text', '')[:600]}"
 
-        response = groq_client.chat.completions.create(
-            model=settings.groq_model,
+        result = chat_json(
             messages=[{
                 "role": "user",
                 "content": DEEP_ANALYSIS_PROMPT.format(
@@ -145,12 +141,9 @@ def groq_deep_analysis(resume_json: dict, job: dict, base_score: int) -> dict:
                 )
             }],
             temperature=0.2,
-            max_tokens=400,
+            max_tokens=500,
+            retries=0,
         )
-        content = response.choices[0].message.content.strip()
-        content = re.sub(r"^```(?:json)?\n?", "", content)
-        content = re.sub(r"\n?```$", "", content)
-        result = json.loads(content)
 
         # Apply Groq's score adjustment (±10 points max)
         adjustment = max(-10, min(10, int(result.get("fit_score_adjustment", 0))))

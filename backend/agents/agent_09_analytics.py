@@ -10,11 +10,10 @@ import email
 from datetime import datetime, timedelta
 from collections import defaultdict
 from loguru import logger
-from groq import Groq
 from core.config import get_settings
+from core.groq_llm import get_client
 
 settings = get_settings()
-client = Groq(api_key=settings.groq_api_key)
 
 # ─── Response detection keywords ───
 INTERVIEW_KEYWORDS = [
@@ -208,7 +207,7 @@ Generate a JSON report with:
 Return ONLY valid JSON."""
 
     try:
-        response = client.chat.completions.create(
+        response = get_client().chat.completions.create(
             model=settings.groq_model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,

@@ -2,14 +2,8 @@
 Agent 06 — Cover Letter Generator
 Generates personalized 250-word cover letters with A/B variants.
 """
-import json
-import re
 from loguru import logger
-from groq import Groq
-from core.config import get_settings
-
-settings = get_settings()
-client = Groq(api_key=settings.groq_api_key)
+from core.groq_llm import chat_json, GroqNotConfiguredError
 
 COVER_LETTER_PROMPT = """You are a professional cover letter writer creating a tailored, high-converting cover letter.
 
@@ -87,8 +81,7 @@ def run(resume_json: dict, job: dict, variant: str = "A") -> dict:
     }
 
     try:
-        response = client.chat.completions.create(
-            model=settings.groq_model,
+        result = chat_json(
             messages=[
                 {"role": "system", "content": "You are an expert cover letter writer. Output only valid JSON."},
                 {
@@ -107,17 +100,18 @@ def run(resume_json: dict, job: dict, variant: str = "A") -> dict:
                 },
             ],
             temperature=0.6,
-            max_tokens=1500,
+            max_tokens=2000,
         )
 
-        content = response.choices[0].message.content.strip()
-        content = re.sub(r"^```(?:json)?\n?", "", content)
-        content = re.sub(r"\n?```$", "", content)
-        result = json.loads(content)
+        if not result.get("cover_letter"):
+            return {"status": "error", "message": "Model returned no cover letter text — try again"}
 
         logger.success(f"[Agent 06] Cover letter generated: {result.get('word_count')} words, tone={result.get('tone_used')}")
         return {"status": "success", **result}
 
+    except GroqNotConfiguredError as e:
+        logger.error(f"[Agent 06] {e}")
+        return {"status": "error", "message": str(e)}
     except Exception as e:
         logger.error(f"[Agent 06] Failed: {e}")
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "message": f"Cover letter generation failed: {e}"}

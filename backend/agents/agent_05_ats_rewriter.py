@@ -3,13 +3,8 @@ Agent 05 — ATS Resume Rewriter Agent
 Rewrites master resume per job description using Groq AI.
 """
 import json
-import re
 from loguru import logger
-from groq import Groq
-from core.config import get_settings
-
-settings = get_settings()
-client = Groq(api_key=settings.groq_api_key)
+from core.groq_llm import chat_json, GroqNotConfiguredError
 
 REWRITE_PROMPT = """You are an elite ATS Resume Optimizer. Your task is to rewrite a resume to achieve >80% keyword match with a specific job description WITHOUT fabricating any experience.
 
@@ -48,7 +43,7 @@ OUTPUT (JSON only):
   "ats_score_estimate": 85
 }}
 
-Return ONLY valid JSON."""
+Keep changes_log to the 5 most important changes. Return ONLY valid JSON."""
 
 
 def clean_for_json(data):
@@ -84,9 +79,8 @@ def run(resume_json: dict, job: dict) -> dict:
     try:
         # Clean DatetimeWithNanoseconds objects
         serializable_resume = clean_for_json(resume_json)
-        
-        response = client.chat.completions.create(
-            model=settings.groq_model,
+
+        result = chat_json(
             messages=[
                 {
                     "role": "system",
@@ -95,7 +89,7 @@ def run(resume_json: dict, job: dict) -> dict:
                 {
                     "role": "user",
                     "content": REWRITE_PROMPT.format(
-                        resume_json=json.dumps(serializable_resume, indent=2)[:3000],
+                        resume_json=json.dumps(serializable_resume, indent=2)[:6000],
                         job_title=job.get("title", ""),
                         company=job.get("company", ""),
                         jd_text=job.get("jd_text", "")[:3000],
@@ -103,13 +97,11 @@ def run(resume_json: dict, job: dict) -> dict:
                 },
             ],
             temperature=0.2,
-            max_tokens=4000,
+            max_tokens=8000,
         )
 
-        content = response.choices[0].message.content.strip()
-        content = re.sub(r"^```(?:json)?\n?", "", content)
-        content = re.sub(r"\n?```$", "", content)
-        result = json.loads(content)
+        if not result.get("rewritten_resume_text"):
+            return {"status": "error", "message": "Model returned no rewritten resume text — try again"}
 
         logger.success(
             f"[Agent 05] ATS Score: {result.get('ats_score_estimate')}% | "
@@ -117,6 +109,9 @@ def run(resume_json: dict, job: dict) -> dict:
         )
         return {"status": "success", **result}
 
+    except GroqNotConfiguredError as e:
+        logger.error(f"[Agent 05] {e}")
+        return {"status": "error", "message": str(e)}
     except Exception as e:
         logger.error(f"[Agent 05] Failed: {e}")
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "message": f"Resume rewrite failed: {e}"}

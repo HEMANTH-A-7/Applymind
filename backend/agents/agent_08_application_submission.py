@@ -19,13 +19,12 @@ from datetime import datetime, time as dt_time
 from pathlib import Path
 from typing import Optional
 from loguru import logger
-from groq import Groq
 
 from core.config import get_settings
+from core.groq_llm import get_client
 from agents import agent_07_credential_manager as cred_mgr
 
 settings = get_settings()
-groq_client = Groq(api_key=settings.groq_api_key)
 
 
 # ─── Groq: answer application questions ───
@@ -64,7 +63,7 @@ def groq_answer_question(
             f"{e.get('role')} at {e.get('company')} ({e.get('start_date','')}-{e.get('end_date','Present')})"
             for e in resume_json.get("experience", [])[:2]
         )
-        response = groq_client.chat.completions.create(
+        response = get_client().chat.completions.create(
             model=settings.groq_model,
             messages=[{
                 "role": "user",

@@ -2,17 +2,11 @@
 Agent 01 — Resume Intake Agent
 Parses uploaded PDF/DOCX resumes into a structured JSON schema.
 """
-import json
-import re
 from pathlib import Path
 from typing import Optional
 from loguru import logger
 
-from groq import Groq
-from core.config import get_settings
-
-settings = get_settings()
-client = Groq(api_key=settings.groq_api_key)
+from core.groq_llm import chat_json, GroqNotConfiguredError
 
 
 PARSE_PROMPT = """You are a resume parser. Extract all structured information from this resume text and return ONLY valid JSON.
@@ -141,50 +135,27 @@ def extract_raw_text(file_path: str) -> str:
 
 
 def parse_resume_with_groq(raw_text: str) -> dict:
-    """Use Groq LLM to parse resume text into structured JSON."""
-    try:
-        response = client.chat.completions.create(
-            model=settings.groq_model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": PARSE_PROMPT.replace("{resume_text}", raw_text[:8000])
-                }
-            ],
-            temperature=0.1,
-            max_tokens=4000,
-        )
-        content = response.choices[0].message.content.strip()
-        # Strip markdown code fences if present
-        content = re.sub(r"^```(?:json)?\n?", "", content)
-        content = re.sub(r"\n?```$", "", content)
-        return json.loads(content)
-    except json.JSONDecodeError as e:
-        logger.error(f"JSON parse error: {e}")
-        return {}
-    except Exception as e:
-        logger.error(f"Groq API error: {e}")
-        return {}
+    """Use Groq LLM to parse resume text into structured JSON. Raises on failure."""
+    result = chat_json(
+        messages=[{"role": "user", "content": PARSE_PROMPT.replace("{resume_text}", raw_text[:8000])}],
+        temperature=0.1,
+        max_tokens=6000,
+    )
+    if not isinstance(result, dict):
+        raise ValueError("Resume parser returned non-object JSON")
+    return result
 
 
 def check_ats_compliance(raw_text: str) -> list:
-    """Identify ATS compliance issues in the resume."""
+    """Identify ATS compliance issues in the resume. Fails open (empty list)."""
     try:
-        response = client.chat.completions.create(
-            model=settings.groq_model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": ATS_CHECK_PROMPT.replace("{resume_text}", raw_text[:4000])
-                }
-            ],
+        result = chat_json(
+            messages=[{"role": "user", "content": ATS_CHECK_PROMPT.replace("{resume_text}", raw_text[:4000])}],
             temperature=0.1,
-            max_tokens=500,
+            max_tokens=800,
+            json_mode=False,  # prompt asks for a bare JSON array
         )
-        content = response.choices[0].message.content.strip()
-        content = re.sub(r"^```(?:json)?\n?", "", content)
-        content = re.sub(r"\n?```$", "", content)
-        return json.loads(content)
+        return result if isinstance(result, list) else []
     except Exception as e:
         logger.error(f"ATS check failed: {e}")
         return []
@@ -207,8 +178,15 @@ def run(file_path: str, user_id: Optional[str] = None) -> dict:
         raw_text = extract_raw_text(file_path)
         if not raw_text.strip():
             return {"status": "error", "message": "Could not extract text from resume"}
-        
-        parsed_data = parse_resume_with_groq(raw_text)
+
+        try:
+            parsed_data = parse_resume_with_groq(raw_text)
+        except GroqNotConfiguredError as e:
+            return {"status": "error", "message": str(e)}
+        except Exception as e:
+            logger.error(f"[Agent 01] Resume parsing failed: {e}")
+            return {"status": "error", "message": f"Resume parsing failed: {e}"}
+
         ats_issues = check_ats_compliance(raw_text)
         
         # Merge ATS issues back into parsed data
