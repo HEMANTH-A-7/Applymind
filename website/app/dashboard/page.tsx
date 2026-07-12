@@ -275,11 +275,11 @@ function JobQueuePanel() {
 
   const triggerScrape = async () => {
     setScraping(true);
-    setScrapeStatus("Queuing scrape across LinkedIn + Search Engine + RemoteOK + HN Hiring + Indeed…");
+    setScrapeStatus("Queuing scrape across LinkedIn + Remotive + Arbeitnow + Jobicy + The Muse + RemoteOK + HN + Web Search…");
     const kw = keywords.split(",").map(k => k.trim()).filter(Boolean);
     await api("/api/jobs/scrape", {
       method: "POST",
-      body: JSON.stringify({ keywords: kw, location, platforms: ["linkedin", "search_engine", "remoteok", "hn", "indeed", "wellfound"], max_jobs: 60, sort_by: sortBy }),
+      body: JSON.stringify({ keywords: kw, location, platforms: ["linkedin", "remotive", "arbeitnow", "jobicy", "themuse", "remoteok", "hn", "search_engine"], max_jobs: 60, sort_by: sortBy }),
     });
     setScrapeStatus("Scraping in background… Fetching matches in 10s");
     await new Promise(r => setTimeout(r, 10000));
@@ -316,7 +316,8 @@ function JobQueuePanel() {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
       } else {
-        alert("Failed to generate PDF. Make sure reportlab is installed on the backend.");
+        const detail = await res.json().then(d => d?.detail).catch(() => null);
+        alert(detail ? `Failed to generate tailored resume: ${detail}` : "Failed to generate PDF. Make sure reportlab is installed on the backend.");
       }
     } catch {
       alert("Error generating PDF.");
@@ -341,7 +342,8 @@ function JobQueuePanel() {
         const data = await res.json();
         setCoverLetter(data.cover_letter || data.cover_letter_text || data.text || "No text returned.");
       } else {
-        alert("Failed to generate cover letter.");
+        const detail = await res.json().then(d => d?.detail).catch(() => null);
+        alert(detail ? `Failed to generate cover letter: ${detail}` : "Failed to generate cover letter.");
       }
     } catch {
       alert("Error communicating with backend.");
@@ -1029,7 +1031,7 @@ function OverviewPanel({ status }: { status: DashboardStatus | null }) {
             onClick={async () => {
               await api("/api/jobs/scrape", {
                 method: "POST",
-                body: JSON.stringify({ keywords: ["software engineer"], location: "Remote", platforms: ["remoteok", "hn"], max_jobs: 30 }),
+                body: JSON.stringify({ keywords: ["software engineer"], location: "Remote", platforms: ["remotive", "remoteok", "hn"], max_jobs: 30 }),
               });
               alert("Scrape queued! Check Job Queue tab in ~15s");
             }}
