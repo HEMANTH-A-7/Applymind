@@ -1,0 +1,26 @@
+{
+  "name": "ApplyMind AI",
+  "short_name": "ApplyMind",
+  "description": "Apply to 200 jobs per week automatically. AI-powered job application automation.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#CCFF00",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "any",
+      "type": "image/x-icon"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/og-image.png",
+      "sizes": "1200x630",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "ApplyMind AI Dashboard"
+    }
+  ]
+}

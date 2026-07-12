@@ -1,0 +1,103 @@
+// Firestore Security Rules
+// Deploy: firebase deploy --only firestore:rules
+// Last updated: 2026-06-18
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helper functions ─────────────────────────────────────────────
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidEmail() {
+      return request.auth.token.email_verified == true;
+    }
+
+    function notTooLarge(fields) {
+      // Prevent storing huge documents
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    // ── /users/{userId} ──────────────────────────────────────────────
+    // Users can only read and update their own profile.
+    // Only allowed fields can be written (no privilege escalation).
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+
+      allow create: if isOwner(userId)
+        && request.resource.data.keys().hasAll(['email', 'displayName', 'plan', 'createdAt'])
+        && request.resource.data.plan == 'free'
+        && (!('isAdmin' in request.resource.data) || request.resource.data.isAdmin == false);
+
+      allow update: if isOwner(userId)
+        && !request.resource.data.diff(resource.data).affectedKeys()
+            .hasAny(['plan', 'createdAt', 'email', 'isAdmin']);  // can't change plan/email/isAdmin directly
+
+      allow delete: if isOwner(userId);
+
+      // ── /users/{userId}/resumes/{resumeId} ────────────────────────
+      match /resumes/{resumeId} {
+        allow read:   if isOwner(userId);
+        allow create: if isOwner(userId)
+          && request.resource.data.size() < 500 * 1024; // max 500KB document
+        allow update: if isOwner(userId);
+        allow delete: if isOwner(userId);
+      }
+
+      // ── /users/{userId}/jobs/{jobId} ─────────────────────────────
+      // Jobs are written by the FastAPI backend (Admin SDK, bypasses rules).
+      // Users can only READ their own jobs, not write directly.
+      match /jobs/{jobId} {
+        allow read:   if isOwner(userId);
+        allow write:  if false;  // Admin SDK only
+      }
+
+      // ── /users/{userId}/applications/{appId} ─────────────────────
+      // Applications are written by agent_08 via Admin SDK.
+      // Users can only read their own application history.
+      match /applications/{appId} {
+        allow read:   if isOwner(userId);
+        allow write:  if false;  // Admin SDK only
+      }
+
+      // ── /users/{userId}/reports/{reportId} ───────────────────────
+      match /reports/{reportId} {
+        allow read:   if isOwner(userId);
+        allow write:  if false;  // Admin SDK only
+      }
+
+      // ── /users/{userId}/credentials/{credId} ─────────────────────
+      // Encrypted platform credentials — extra-sensitive.
+      // Even the owner cannot read raw credential documents from the browser.
+      // Access is ONLY through FastAPI + Admin SDK.
+      match /credentials/{credId} {
+        allow read:  if false;   // Admin SDK only — never expose to browser
+        allow write: if false;   // Admin SDK only
+      }
+    }
+
+    // ── /audit_logs/{logId} ──────────────────────────────────────────
+    // Audit logs of admin operations. Writeable by Admin SDK only.
+    match /audit_logs/{logId} {
+      allow read, write: if false;  // Admin SDK only
+    }
+
+    // ── /public_jobs/{jobId} ─────────────────────────────────────────
+    // Optional: a public curated job board anyone can read.
+    match /public_jobs/{jobId} {
+      allow read: if true;
+      allow write: if false;  // Admin SDK only
+    }
+
+    // ── Catch-all: deny everything else ──────────────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

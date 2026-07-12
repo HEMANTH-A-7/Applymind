@@ -1,0 +1,1 @@
+"""ApplyMind AI — Core Package"""

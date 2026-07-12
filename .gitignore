@@ -1,0 +1,59 @@
+# ─── NEVER COMMIT THESE ───────────────────────────────────────────────
+.env
+.env.local
+.env.production
+.env.*.local
+*.env
+
+# ─── Firebase secrets ─────────────────────────────────────────────────
+firebase-service-account.json
+*-service-account.json
+*.serviceAccount.json
+
+# ─── Node ─────────────────────────────────────────────────────────────
+node_modules/
+.next/
+out/
+dist/
+build/
+npm-debug.log*
+
+# ─── Python ───────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+env/
+.venv/
+*.egg-info/
+dist/
+.pytest_cache/
+
+# ─── IDE ──────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ─── Logs ─────────────────────────────────────────────────────────────
+*.log
+logs/
+*.log.*
+
+# ─── Generated / temp ─────────────────────────────────────────────────
+*.pdf
+uploads/
+tmp/
+temp/
+
+# ─── Source maps (never commit — already disabled in build) ───────────
+*.js.map
+*.css.map
+
+# ─── Docker ───────────────────────────────────────────────────────────
+.dockerignore
+docker-compose.override.yml
