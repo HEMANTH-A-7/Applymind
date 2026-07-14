@@ -61,13 +61,17 @@ const nextConfig: NextConfig = {
           },
         ],
       },
-      // Cache static assets aggressively
-      {
+      // Cache static assets aggressively — production only. Applying this in
+      // dev makes Turbopack's stable dev chunk filenames look permanently
+      // stale to the browser (hard reloads and even new tabs kept serving
+      // pre-edit JS), which is exactly what Next.js's own dev-server warning
+      // for this route pattern is about.
+      ...(isProd ? [{
         source: "/_next/static/(.*)",
         headers: [
           { key: "Cache-Control", value: "public, max-age=31536000, immutable" },
         ],
-      },
+      }] : []),
       // OG image cached 1 week
       {
         source: "/og-image.png",

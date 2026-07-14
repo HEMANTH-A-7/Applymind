@@ -1,11 +1,14 @@
 """
-Shared Groq client + robust JSON-output helper.
+Shared LLM client + robust JSON-output helper.
 
-Every agent that asks Groq for JSON goes through chat_json() so that:
-  • a missing GROQ_API_KEY produces one clear error instead of a cryptic 401/500
+Every agent that asks the LLM for JSON goes through chat_json() so that:
+  • a missing API key produces one clear error instead of a cryptic 401/500
   • markdown fences, chatter before/after the JSON, and truncated output
     are handled (extract → repair → retry) instead of crashing json.loads
-  • Groq's native JSON mode (response_format=json_object) is used when possible
+  • native JSON mode (response_format=json_object) is used when possible
+  • Groq is tried first (fastest); if it errors, rate-limits, or fails to
+    return parseable JSON after retries, Gemini is tried next — two
+    independent free quotas instead of one single point of failure
 """
 import json
 import re
@@ -19,7 +22,7 @@ _client = None
 
 
 class GroqNotConfiguredError(RuntimeError):
-    """Raised when GROQ_API_KEY is missing so routes can return a clear 503."""
+    """Raised when no LLM provider (Groq or Gemini) is configured."""
 
 
 def get_client():
@@ -35,6 +38,46 @@ def get_client():
         from groq import Groq
         _client = Groq(api_key=settings.groq_api_key)
     return _client
+
+
+GEMINI_OPENAI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+
+
+def _groq_chat(messages: list[dict], temperature: float, max_tokens: int, json_mode: bool, model: str) -> str:
+    client = get_client()
+    kwargs = dict(model=model, messages=messages, temperature=temperature, max_tokens=max_tokens)
+    if json_mode:
+        kwargs["response_format"] = {"type": "json_object"}
+    try:
+        response = client.chat.completions.create(**kwargs)
+    except Exception as e:
+        # Older models/params may reject response_format — retry without it
+        if json_mode and "response_format" in str(e):
+            response = client.chat.completions.create(
+                **{k: v for k, v in kwargs.items() if k != "response_format"}
+            )
+        else:
+            raise
+    return response.choices[0].message.content or ""
+
+
+def _gemini_chat(messages: list[dict], temperature: float, max_tokens: int, json_mode: bool, model: str) -> str:
+    settings = get_settings()
+    if not settings.gemini_api_key:
+        raise GroqNotConfiguredError("GEMINI_API_KEY is not configured.")
+    import httpx
+    body = {"model": model, "messages": messages, "temperature": temperature, "max_tokens": max_tokens}
+    if json_mode:
+        body["response_format"] = {"type": "json_object"}
+    resp = httpx.post(
+        GEMINI_OPENAI_ENDPOINT,
+        headers={"Authorization": f"Bearer {settings.gemini_api_key}"},
+        json=body,
+        timeout=60.0,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    return data["choices"][0]["message"]["content"] or ""
 
 
 def extract_json(content: str):
@@ -94,48 +137,57 @@ def chat_json(
     model: Optional[str] = None,
 ):
     """
-    Call Groq chat completions and return parsed JSON (dict or list).
+    Call an LLM and return parsed JSON (dict or list). Tries Groq first,
+    then falls back to Gemini if Groq is unconfigured, errors, rate-limits,
+    or never returns parseable JSON within `retries` attempts.
 
-    json_mode uses Groq's response_format=json_object (objects only — pass
+    json_mode uses native response_format=json_object (objects only — pass
     json_mode=False when the prompt asks for a bare JSON array).
-    Retries once on parse failure with a stricter instruction.
+
+    `model`, if given, overrides the default model on whichever provider
+    ends up handling the call — leave it unset in normal use.
     """
-    client = get_client()
     settings = get_settings()
-    model = model or settings.groq_model
+    providers = []
+    if settings.groq_api_key and settings.groq_api_key != "your_groq_api_key_here":
+        providers.append(("groq", _groq_chat, model or settings.groq_model))
+    if settings.gemini_api_key:
+        providers.append(("gemini", _gemini_chat, model or settings.gemini_model))
+
+    if not providers:
+        raise GroqNotConfiguredError(
+            "No LLM provider configured. Add GROQ_API_KEY (https://console.groq.com/keys) "
+            "and/or GEMINI_API_KEY (https://aistudio.google.com/apikey) to backend/.env "
+            "and restart the backend."
+        )
 
     last_error: Exception = RuntimeError("chat_json: no attempts made")
-    for attempt in range(retries + 1):
-        kwargs = dict(
-            model=model,
-            messages=messages,
-            temperature=temperature if attempt == 0 else 0.0,
-            max_tokens=max_tokens,
-        )
-        if json_mode:
-            kwargs["response_format"] = {"type": "json_object"}
-        try:
-            response = client.chat.completions.create(**kwargs)
-        except Exception as e:
-            # Older models/params may reject response_format — retry without it
-            if json_mode and "response_format" in str(e):
-                json_mode = False
-                response = client.chat.completions.create(
-                    **{k: v for k, v in kwargs.items() if k != "response_format"}
+    for provider_name, call_fn, provider_model in providers:
+        provider_messages = messages
+        provider_json_mode = json_mode
+        for attempt in range(retries + 1):
+            try:
+                content = call_fn(
+                    provider_messages,
+                    temperature if attempt == 0 else 0.0,
+                    max_tokens,
+                    provider_json_mode,
+                    provider_model,
                 )
-            else:
-                raise
+            except Exception as e:
+                last_error = e
+                logger.warning(f"[groq_llm] {provider_name} call failed: {type(e).__name__}: {e}")
+                break  # give up on this provider, try the next one
 
-        content = response.choices[0].message.content or ""
-        try:
-            return extract_json(content)
-        except json.JSONDecodeError as e:
-            last_error = e
-            logger.warning(f"[groq_llm] JSON parse failed (attempt {attempt + 1}): {e}")
-            if attempt < retries:
-                messages = messages + [
-                    {"role": "assistant", "content": content[:2000]},
-                    {"role": "user", "content": "That was not valid JSON. Return the complete response again as ONLY valid, well-formed JSON with no other text."},
-                ]
+            try:
+                return extract_json(content)
+            except json.JSONDecodeError as e:
+                last_error = e
+                logger.warning(f"[groq_llm] {provider_name} JSON parse failed (attempt {attempt + 1}): {e}")
+                if attempt < retries:
+                    provider_messages = provider_messages + [
+                        {"role": "assistant", "content": content[:2000]},
+                        {"role": "user", "content": "That was not valid JSON. Return the complete response again as ONLY valid, well-formed JSON with no other text."},
+                    ]
 
     raise last_error

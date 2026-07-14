@@ -224,12 +224,14 @@ class ScrapeRequest(BaseModel):
     keywords: List[str] = ["software engineer", "python developer"]
     location: str = "Remote"
     # Verified-working public sources; "indeed"/"wellfound" are opt-in (both 403 anonymous scraping)
+    # "adzuna" is a no-op unless ADZUNA_APP_ID/ADZUNA_APP_KEY are configured.
     platforms: List[str] = [
         "linkedin", "remotive", "arbeitnow", "jobicy", "themuse",
-        "remoteok", "hn", "search_engine",
+        "remoteok", "hn", "search_engine", "adzuna",
     ]
     max_jobs: int = 100
     sort_by: str = "date"
+    country: str = "in"  # Adzuna country code; ignored by other sources
 
 
 @app.get("/api/jobs/matches", tags=["Jobs"])
@@ -497,13 +499,12 @@ async def trigger_scrape(request: Request, req: ScrapeRequest, background_tasks:
     """Trigger Agent 03 job scraper across platforms."""
     from agents import agent_03_job_scraper
 
-    async def do_scrape_async(uid: str):
-        db_instance = get_db()
-        resume = db_instance.get_latest_resume(uid)
-        if not resume:
-            logger.error(f"Cannot score scraped jobs: User {uid} has no resume.")
-            return
+    db = get_db()
+    resume = db.get_latest_resume(token["uid"])
+    if not resume:
+        raise HTTPException(status_code=400, detail="Upload a resume first — jobs are scored against it, so scraping needs one to save any results.")
 
+    async def do_scrape_async(uid: str):
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
             None,
@@ -513,6 +514,7 @@ async def trigger_scrape(request: Request, req: ScrapeRequest, background_tasks:
                 platforms=req.platforms,
                 max_jobs=req.max_jobs,
                 sort_by=req.sort_by,
+                country=req.country,
             )
         )
         raw_jobs = result.get("jobs", [])
@@ -523,7 +525,7 @@ async def trigger_scrape(request: Request, req: ScrapeRequest, background_tasks:
         ranked_jobs = match_result.get("ranked_jobs", [])
 
         # Save to Firestore
-        db_instance.save_jobs(uid, ranked_jobs)
+        db.save_jobs(uid, ranked_jobs)
         logger.info(f"Scraped and saved {len(ranked_jobs)} matched jobs for user {uid}")
 
     background_tasks.add_task(do_scrape_async, token["uid"])

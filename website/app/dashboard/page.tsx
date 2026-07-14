@@ -275,12 +275,18 @@ function JobQueuePanel() {
 
   const triggerScrape = async () => {
     setScraping(true);
-    setScrapeStatus("Queuing scrape across LinkedIn + Remotive + Arbeitnow + Jobicy + The Muse + RemoteOK + HN + Web Search…");
+    setScrapeStatus("Queuing scrape across LinkedIn + Remotive + Arbeitnow + Jobicy + The Muse + RemoteOK + HN + Web Search + Adzuna…");
     const kw = keywords.split(",").map(k => k.trim()).filter(Boolean);
-    await api("/api/jobs/scrape", {
+    const res = await authFetch(`${API}/api/jobs/scrape`, {
       method: "POST",
-      body: JSON.stringify({ keywords: kw, location, platforms: ["linkedin", "remotive", "arbeitnow", "jobicy", "themuse", "remoteok", "hn", "search_engine"], max_jobs: 60, sort_by: sortBy }),
+      body: JSON.stringify({ keywords: kw, location, platforms: ["linkedin", "remotive", "arbeitnow", "jobicy", "themuse", "remoteok", "hn", "search_engine", "adzuna"], max_jobs: 60, sort_by: sortBy, country: "in" }),
     });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      setScrapeStatus(data.detail || "Scrape failed to start");
+      setScraping(false);
+      return;
+    }
     setScrapeStatus("Scraping in background… Fetching matches in 10s");
     await new Promise(r => setTimeout(r, 10000));
     const matches = await api<any>(`/api/jobs/matches?min_score=0&limit=60&sort_by=${sortBy}`);

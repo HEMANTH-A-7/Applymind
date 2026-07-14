@@ -32,7 +32,10 @@ export default function LoginPage() {
         if (password.length < 8) { setError("Password must be 8+ characters"); setBusy(false); return; }
         await signUp(email, password, name);
       }
-      router.push("/dashboard");
+      // Don't navigate here — the useEffect above redirects once the auth
+      // context's `user` actually updates. Pushing immediately races that
+      // update (context can still be null for a tick), which was bouncing
+      // users straight back to /login right after a successful sign-in.
     } catch (err: any) {
       const code = err?.code ?? "";
       if (code === "auth/user-not-found" || code === "auth/wrong-password") {
@@ -58,7 +61,9 @@ export default function LoginPage() {
     setBusy(true);
     try {
       await signInWithGoogle();
-      router.push("/dashboard");
+      // No router.push here either — see comment in handleSubmit above.
+      // (Also: if this fell through to signInWithRedirect, the page has
+      // already navigated away and this line never runs anyway.)
     } catch (err: any) {
       setError(err?.message ?? "Google sign-in failed");
     } finally {

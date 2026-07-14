@@ -9,9 +9,17 @@ class Settings(BaseSettings):
     # App environment
     environment: str = "development"
 
-    # Groq
+    # Groq (primary LLM)
     groq_api_key: str = ""
     groq_model: str = "llama-3.3-70b-versatile"
+
+    # Gemini (fallback LLM — used when Groq errors or rate-limits)
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.0-flash"
+
+    # Adzuna (job listings API)
+    adzuna_app_id: str = ""
+    adzuna_app_key: str = ""
 
     # Database
     database_url: str = "postgresql+asyncpg://applymind:applymind123@localhost:5432/applymind"

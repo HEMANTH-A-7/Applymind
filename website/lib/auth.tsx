@@ -12,6 +12,7 @@ import {
   GoogleAuthProvider,
   signInWithPopup,
   signInWithRedirect,
+  getRedirectResult,
   updateProfile,
 } from "firebase/auth";
 import { doc, setDoc, getDoc, serverTimestamp } from "firebase/firestore";
@@ -63,6 +64,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.error("Error creating user profile document in Firestore:", err);
     }
   };
+
+  // Catch the result of a signInWithRedirect fallback (popup blocked/closed).
+  // Without this, a completed redirect sign-in is picked up by
+  // onAuthStateChanged below, but createUserDoc never runs for it — only
+  // the popup path called it directly.
+  useEffect(() => {
+    getRedirectResult(auth)
+      .then(async (cred) => {
+        if (cred?.user) {
+          await createUserDoc(
+            cred.user.uid,
+            cred.user.email ?? "",
+            cred.user.displayName ?? "User",
+          );
+        }
+      })
+      .catch((err) => console.error("Google redirect sign-in failed:", err));
+  }, []);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (firebaseUser) => {

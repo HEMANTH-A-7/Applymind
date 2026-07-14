@@ -10,6 +10,7 @@ Default sources (all verified working without auth, 2026-07):
   • RemoteOK  — public JSON API
   • HN Who's Hiring — HN Algolia API
   • Web Search — Yahoo results limited to Greenhouse/Lever/Ashby/Workday boards
+  • Adzuna    — job listings API, needs a free key (best free India coverage)
 
 Opt-in (currently 403-block anonymous scraping): Indeed, Wellfound.
 
@@ -945,6 +946,63 @@ async def scrape_themuse(keywords: list[str], location: str = "Remote", max_jobs
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  SCRAPER 11: Adzuna (job listings API — best free India coverage)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+async def scrape_adzuna(keywords: list[str], location: str = "Remote", max_jobs: int = 30, country: str = "in") -> list[dict]:
+    """Adzuna job search API — needs a free ADZUNA_APP_ID/ADZUNA_APP_KEY."""
+    jobs = []
+    if not settings.adzuna_app_id or not settings.adzuna_app_key:
+        logger.info("[Adzuna] Skipped — ADZUNA_APP_ID/ADZUNA_APP_KEY not configured")
+        return jobs
+    try:
+        async with aiohttp.ClientSession() as session:
+            for keyword in keywords[:2]:
+                params = {
+                    "app_id": settings.adzuna_app_id,
+                    "app_key": settings.adzuna_app_key,
+                    "what": keyword,
+                    "results_per_page": str(min(max_jobs, 50)),
+                    "content-type": "application/json",
+                }
+                if location and location.lower() != "remote":
+                    params["where"] = location
+                async with session.get(
+                    f"https://api.adzuna.com/v1/api/jobs/{country}/search/1",
+                    params=params,
+                    timeout=aiohttp.ClientTimeout(total=20),
+                ) as resp:
+                    if resp.status != 200:
+                        logger.warning(f"[Adzuna] HTTP {resp.status} for '{keyword}'")
+                        continue
+                    data = await resp.json(content_type=None)
+
+                for item in data.get("results", []):
+                    sal_min, sal_max = item.get("salary_min"), item.get("salary_max")
+                    salary = f"₹{int(sal_min):,}–₹{int(sal_max):,}" if sal_min and sal_max else ""
+                    loc = (item.get("location") or {}).get("display_name", location)
+                    jobs.append(make_job(
+                        title=item.get("title", ""),
+                        company=(item.get("company") or {}).get("display_name", "Unknown"),
+                        location=loc,
+                        jd_text=item.get("description", ""),
+                        apply_url=item.get("redirect_url", ""),
+                        apply_method="form",
+                        source="adzuna",
+                        salary=salary,
+                        tags=[(item.get("category") or {}).get("label", "")],
+                        posted_date=item.get("created", ""),
+                    ))
+                    if len(jobs) >= max_jobs:
+                        break
+                if len(jobs) >= max_jobs:
+                    break
+        logger.success(f"[Adzuna] Scraped {len(jobs)} jobs")
+    except Exception as e:
+        logger.error(f"[Adzuna] Failed: {type(e).__name__}: {e}")
+    return jobs
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  GROQ FALLBACK — Generate realistic jobs when scraping yields 0
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 GENERATE_JOBS_PROMPT = """Generate exactly {count} realistic job postings for "{keywords}" roles.
@@ -1049,7 +1107,7 @@ async def enrich_batch(jobs: list[dict], max_enrich: int = 20) -> list[dict]:
 # indeed/wellfound are kept as opt-in: both currently hard-block plain HTTP (403).
 DEFAULT_PLATFORMS = [
     "linkedin", "remotive", "arbeitnow", "jobicy", "themuse",
-    "remoteok", "hn", "search_engine",
+    "remoteok", "hn", "search_engine", "adzuna",
 ]
 
 
@@ -1061,6 +1119,7 @@ async def run_async(
     enrich: bool = True,
     sort_by: str = "date",
     allow_synthetic: bool = False,
+    country: str = "in",
 ) -> dict:
     """
     Async scrape across all platforms + Groq enrichment.
@@ -1075,6 +1134,8 @@ async def run_async(
         allow_synthetic: If True, generate Groq synthetic jobs when scraping
             yields almost nothing. Off by default — synthetic listings are not
             real openings and must never silently mix with scraped jobs.
+        country: Adzuna country code (e.g. "in", "us", "gb") — only affects
+            the "adzuna" platform; a no-op if ADZUNA_APP_ID isn't configured.
 
     Returns:
         dict with jobs list, counts, sources breakdown
@@ -1106,6 +1167,8 @@ async def run_async(
         tasks.append(("indeed", scrape_indeed(keywords, location, per_platform)))
     if "wellfound" in platforms:
         tasks.append(("wellfound", scrape_wellfound(keywords, location, per_platform)))
+    if "adzuna" in platforms:
+        tasks.append(("adzuna", scrape_adzuna(keywords, location, per_platform, country)))
 
     # Run all scrapers in parallel
     results = await asyncio.gather(*[t[1] for t in tasks], return_exceptions=True)
@@ -1163,6 +1226,6 @@ async def run_async(
 
 def run(keywords: list[str] = None, location: str = "Remote",
         platforms: list[str] = None, max_jobs: int = 100, enrich: bool = True,
-        sort_by: str = "date", allow_synthetic: bool = False) -> dict:
+        sort_by: str = "date", allow_synthetic: bool = False, country: str = "in") -> dict:
     """Sync wrapper — safe to call from FastAPI BackgroundTasks."""
-    return asyncio.run(run_async(keywords, location, platforms, max_jobs, enrich, sort_by, allow_synthetic))
+    return asyncio.run(run_async(keywords, location, platforms, max_jobs, enrich, sort_by, allow_synthetic, country))
