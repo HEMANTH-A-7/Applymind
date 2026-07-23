@@ -49,43 +49,75 @@ def cosine_sim(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / (na * nb))
 
 
-def build_resume_text(resume_json: dict) -> str:
-    """Flatten resume to single scoring string. Skills are weighted 3x."""
-    parts = []
+def build_section_texts(resume_json: dict) -> dict[str, str]:
+    """Split resume into independent scoring sections instead of one flat bag-of-words.
+
+    Scoring skills/experience/projects/summary against the JD separately (then blending
+    by weight) means a strong project or work-history match still counts even when its
+    phrasing differs from the JD's skill list — a flat bag dominated by 3x-weighted
+    skill tokens drowned that signal out before.
+    """
     skills = resume_json.get("skills", {})
     all_skills = (
         skills.get("technical", []) +
         skills.get("tools", []) +
         skills.get("languages", [])
     )
-    # Weight skills 3x — most important for job matching
-    parts.extend(all_skills * 3)
 
+    exp_parts = []
     for exp in resume_json.get("experience", []):
-        parts.append(exp.get("role", ""))
-        parts.extend(exp.get("bullets", []))
+        exp_parts.append(exp.get("role", ""))
+        exp_parts.extend(exp.get("bullets", []))
+        exp_parts.extend(str(m) for m in exp.get("metrics", []))
 
+    proj_parts = []
     for proj in resume_json.get("projects", []):
-        parts.extend(proj.get("tech_stack", []) * 2)
-        parts.extend(proj.get("bullets", []))
+        proj_parts.append(proj.get("name", ""))
+        proj_parts.append(proj.get("description", ""))
+        proj_parts.extend(proj.get("tech_stack", []))
+        proj_parts.extend(proj.get("bullets", []))
 
-    parts.append(resume_json.get("summary", ""))
-    return " ".join(str(p) for p in parts)
+    return {
+        "skills": " ".join(str(s) for s in all_skills),
+        "experience": " ".join(str(p) for p in exp_parts),
+        "projects": " ".join(str(p) for p in proj_parts),
+        "summary": str(resume_json.get("summary", "")),
+    }
+
+
+# How much each resume section counts toward the keyword-similarity base score.
+# Skills still lead (JDs are skill-list-heavy) but experience/projects together
+# now outweigh skills, so hands-on work isn't drowned out by a skills list.
+SECTION_WEIGHTS = {"skills": 0.35, "experience": 0.30, "projects": 0.25, "summary": 0.10}
 
 
 def fast_score(resume_json: dict, job: dict) -> int:
-    """TF-IDF cosine similarity score 0–100."""
-    user_text = build_resume_text(resume_json)
+    """Weighted multi-section TF-IDF cosine similarity, 0–100.
+
+    This is the cheap bulk-pass score run against every job (an LLM call per job
+    isn't feasible at scale) — see groq_deep_analysis() for the semantic pass that
+    actually reads experience/project substance for the top matches.
+    """
+    sections = build_section_texts(resume_json)
     jd_text = f"{job.get('title', '')} {job.get('jd_text', '')} {' '.join(job.get('tags', []))} {' '.join(job.get('required_skills', []))}"
-
-    ut = tokenize(user_text)
     jt = tokenize(jd_text)
-    vocab = list(set(ut + jt))
 
-    uv = tfidf_vector(ut, vocab)
-    jv = tfidf_vector(jt, vocab)
+    weighted_sum = 0.0
+    total_weight = 0.0
+    for section, weight in SECTION_WEIGHTS.items():
+        st = tokenize(sections[section])
+        if not st:
+            continue
+        vocab = list(set(st + jt))
+        sv = tfidf_vector(st, vocab)
+        jv = tfidf_vector(jt, vocab)
+        weighted_sum += cosine_sim(sv, jv) * weight
+        total_weight += weight
 
-    raw = cosine_sim(uv, jv)
+    if total_weight == 0:
+        return 0
+
+    raw = weighted_sum / total_weight
     # Scale from typical cosine range (0.02–0.4) to 0–100
     score = min(100, int(raw * 380))
     return score
@@ -94,21 +126,35 @@ def fast_score(resume_json: dict, job: dict) -> int:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  GROQ DEEP ANALYSIS (for top 10 matches only)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-DEEP_ANALYSIS_PROMPT = """You are a career coach. Analyze how well this candidate fits this job.
+DEEP_ANALYSIS_PROMPT = """You are a senior technical recruiter. Judge how well this candidate actually
+fits this job — not by keyword overlap, but by whether their real work experience and projects
+demonstrate the capabilities the job needs, even when worded differently than the JD.
 
 Candidate Skills: {user_skills}
-Candidate Experience: {user_experience}
+
+Candidate Work Experience:
+{user_experience}
+
+Candidate Projects:
+{user_projects}
 
 Job: {job_title} at {company}
 Job Requirements: {jd_excerpt}
 
+Consider:
+- Does their work experience show they've actually done similar work, not just held a similar title?
+- Do their projects demonstrate the core competencies this job needs, even under different terminology?
+- Is their seniority/scope (intern/junior/senior, ownership, team size) appropriate for this role?
+
 Return JSON:
 {{
-  "fit_score_adjustment": 5,
+  "semantic_fit_score": 72,
   "fit_label": "Sweet Spot|Overqualified|Underqualified|Strong Match",
   "recommendation": "strong_apply|apply|apply_with_caution|skip",
   "matching_skills": ["skill1", "skill2"],
   "missing_skills": ["skill1", "skill2"],
+  "experience_relevance": "One sentence on how well work experience maps to this role",
+  "project_relevance": "One sentence on how well projects map to this role",
   "gap_severity": "none|minor|moderate|major",
   "quick_action": "One specific thing to do before applying (max 20 words)",
   "talking_points": ["1 achievement to highlight in cover letter"]
@@ -117,17 +163,36 @@ Return ONLY valid JSON."""
 
 
 def groq_deep_analysis(resume_json: dict, job: dict, base_score: int) -> dict:
-    """Groq-powered deep gap analysis for a single job."""
+    """Groq-powered semantic fit analysis for a single job.
+
+    Reads actual experience/project bullets (not just role titles and a skill list) so the
+    model can judge substance, then blends its semantic read with the keyword-based
+    base_score — keyword overlap alone rewards phrasing coincidence, and an LLM score
+    alone can be swayed by confident-sounding but shallow bullets, so neither is used
+    on its own.
+    """
     try:
         skills = resume_json.get("skills", {})
         user_skills_str = ", ".join(
             skills.get("technical", []) + skills.get("tools", [])
         )[:600]
-        user_exp_str = "; ".join(
-            f"{e.get('role')} at {e.get('company')}"
-            for e in resume_json.get("experience", [])[:3]
-        )
-        jd_excerpt = f"{job.get('title')} | {job.get('jd_text', '')[:600]}"
+
+        exp_lines = []
+        for e in resume_json.get("experience", [])[:3]:
+            bullets = "; ".join(e.get("bullets", [])[:3])
+            role_line = f"{e.get('role', '')} at {e.get('company', '')}"
+            exp_lines.append(f"{role_line} — {bullets}" if bullets else role_line)
+        user_exp_str = "\n".join(exp_lines)[:1200] or "None listed"
+
+        proj_lines = []
+        for p in resume_json.get("projects", [])[:3]:
+            tech = ", ".join(p.get("tech_stack", []))
+            bullets = "; ".join(p.get("bullets", [])[:2])
+            label = f"{p.get('name', '')} ({tech})" if tech else p.get("name", "")
+            proj_lines.append(f"{label} — {bullets}" if bullets else label)
+        user_proj_str = "\n".join(proj_lines)[:1200] or "None listed"
+
+        jd_excerpt = f"{job.get('title')} | {job.get('jd_text', '')[:800]}"
 
         result = chat_json(
             messages=[{
@@ -135,19 +200,23 @@ def groq_deep_analysis(resume_json: dict, job: dict, base_score: int) -> dict:
                 "content": DEEP_ANALYSIS_PROMPT.format(
                     user_skills=user_skills_str,
                     user_experience=user_exp_str,
+                    user_projects=user_proj_str,
                     job_title=job.get("title", ""),
                     company=job.get("company", ""),
                     jd_excerpt=jd_excerpt,
                 )
             }],
             temperature=0.2,
-            max_tokens=500,
+            max_tokens=600,
             retries=0,
         )
 
-        # Apply Groq's score adjustment (±10 points max)
-        adjustment = max(-10, min(10, int(result.get("fit_score_adjustment", 0))))
-        result["adjusted_score"] = min(100, max(0, base_score + adjustment))
+        semantic_score = max(0, min(100, int(result.get("semantic_fit_score", base_score))))
+        # 60% semantic / 40% keyword — semantic read of actual substance leads,
+        # keyword score still anchors it so a hallucinated read can't run away.
+        blended = round(0.4 * base_score + 0.6 * semantic_score)
+        result["semantic_fit_score"] = semantic_score
+        result["adjusted_score"] = min(100, max(0, blended))
         result["groq_analyzed"] = True
         return result
     except Exception as e:

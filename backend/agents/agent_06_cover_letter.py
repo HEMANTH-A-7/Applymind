@@ -10,13 +10,15 @@ COVER_LETTER_PROMPT = """You are a professional cover letter writer creating a t
 STRICT RULES:
 - Exactly 250 words (±10)
 - Opening: reference something specific about the company (not generic)
-- Body: highlight exactly 2-3 user achievements most relevant to this role
+- Body: pitch the candidate around their key skills below, backed by 2-3 metric-driven achievements most relevant to this role — every claim is a real quantified result, not a buzzword
+- No filler adjectives ("passionate", "dynamic", "results-driven", "hardworking", "team player"); no word or phrase repeated more than twice
 - Tone: {tone} (startup = conversational and energetic; enterprise = professional and precise)
 - Do NOT start with "I am writing to..."
 - Do NOT use generic phrases like "I believe I am a great fit"
 - Use the EXACT job title from the posting
 - Variant {variant}: {variant_instruction}
 
+Candidate's key skills (prioritized for this JD): {key_skills}
 Candidate's top achievements (from resume):
 {achievements}
 
@@ -42,6 +44,16 @@ def detect_tone(company: str, jd_text: str) -> str:
     startup_signals = ["startup", "fast-paced", "agile", "we move fast", "small team", "equity", "seed", "series"]
     jd_lower = jd_text.lower()
     return "startup" if any(s in jd_lower for s in startup_signals) else "enterprise"
+
+
+def extract_key_skills(resume_json: dict, jd_text: str, limit: int = 8) -> str:
+    """Candidate's skills most relevant to this JD — skills mentioned in the JD lead, rest fill in."""
+    skills = resume_json.get("skills", {})
+    all_skills = skills.get("technical", []) + skills.get("tools", []) + skills.get("languages", [])
+    jd_lower = jd_text.lower()
+    matched = [s for s in all_skills if s.lower() in jd_lower]
+    rest = [s for s in all_skills if s not in matched]
+    return ", ".join((matched + rest)[:limit])
 
 
 def extract_achievements(resume_json: dict) -> str:
@@ -73,6 +85,7 @@ def run(resume_json: dict, job: dict, variant: str = "A") -> dict:
 
     tone = detect_tone(job.get("company", ""), job.get("jd_text", ""))
     achievements = extract_achievements(resume_json)
+    key_skills = extract_key_skills(resume_json, job.get("jd_text", ""))
     candidate_name = resume_json.get("contact", {}).get("name", "the candidate")
 
     variant_instructions = {
@@ -90,6 +103,7 @@ def run(resume_json: dict, job: dict, variant: str = "A") -> dict:
                         tone=tone,
                         variant=variant,
                         variant_instruction=variant_instructions.get(variant, variant_instructions["A"]),
+                        key_skills=key_skills,
                         achievements=achievements,
                         job_title=job.get("title", ""),
                         company=job.get("company", ""),

@@ -92,12 +92,36 @@ Resume text:
 Return ONLY the JSON array."""
 
 
+def _inline_hyperlinks(page, text: str) -> str:
+    """Inline each hyperlink's real URL next to its anchor text (e.g. "LinkedIn" ->
+    "LinkedIn (https://linkedin.com/in/...)"). Plain text extraction drops the href behind
+    linked words/buttons like "LinkedIn" or "Live Demo" entirely, which starves the resume
+    parser of real contact/project URLs and it may fabricate placeholders to fill the gap."""
+    links = [l for l in (page.hyperlinks or []) if l.get("uri", "").strip() and not l["uri"].startswith("mailto:")]
+    cursor = 0
+    for link in sorted(links, key=lambda l: (round(l["top"], 1), l["x0"])):
+        try:
+            anchor = (page.within_bbox((link["x0"], link["top"], link["x1"], link["bottom"])).extract_text() or "").strip()
+        except Exception:
+            anchor = ""
+        if not anchor:
+            continue
+        idx = text.find(anchor, cursor)
+        if idx == -1:
+            continue
+        insert_at = idx + len(anchor)
+        suffix = f" ({link['uri']})"
+        text = text[:insert_at] + suffix + text[insert_at:]
+        cursor = insert_at + len(suffix)
+    return text
+
+
 def extract_text_from_pdf(file_path: str) -> str:
     """Extract text from PDF using pdfplumber or pypdf."""
     try:
         import pdfplumber
         with pdfplumber.open(file_path) as pdf:
-            return "\n".join(page.extract_text() or "" for page in pdf.pages)
+            return "\n".join(_inline_hyperlinks(page, page.extract_text() or "") for page in pdf.pages)
     except ImportError:
         pass
     try:

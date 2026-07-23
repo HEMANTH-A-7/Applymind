@@ -3,6 +3,7 @@ Resume PDF Generator — ReportLab
 Converts ATS-rewritten resume text into a professional, ATS-safe PDF.
 No images, tables, columns, or special characters.
 """
+import re
 from pathlib import Path
 from datetime import datetime
 from loguru import logger
@@ -34,6 +35,24 @@ def _sanitize(text: str) -> str:
     for old, new in replacements.items():
         text = text.replace(old, new)
     return text
+
+
+_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+
+
+def _sanitize_contact(text: str) -> str:
+    """Sanitize the contact line while turning "[Label](url)" markdown into a clickable
+    ReportLab link — lets LinkedIn/GitHub/Portfolio render as short blue link text instead
+    of raw URLs, matching the candidate's actual resume style."""
+    parts = []
+    last = 0
+    for m in _LINK_RE.finditer(text):
+        parts.append(_sanitize(text[last:m.start()]))
+        label, url = m.group(1), m.group(2).replace('"', "%22")
+        parts.append(f'<link href="{url}" color="#1a56db"><u>{_sanitize(label)}</u></link>')
+        last = m.end()
+    parts.append(_sanitize(text[last:]))
+    return "".join(parts)
 
 
 def generate_pdf_from_text(
@@ -145,11 +164,11 @@ def generate_pdf_from_text(
 
         # Contact info (email/phone patterns)
         if i < 5 and ("@" in line or line.startswith("+") or "|" in line):
-            content.append(Paragraph(clean, contact_style))
+            content.append(Paragraph(_sanitize_contact(line), contact_style))
             continue
 
         # Section headers (ALL CAPS lines or known section names)
-        section_keywords = ["SUMMARY", "SKILLS", "TECHNICAL", "EXPERIENCE", "EDUCATION", "PROJECTS", "CERTIFICATIONS", "AWARDS"]
+        section_keywords = ["SUMMARY", "SKILLS", "TECHNICAL", "EXPERIENCE", "EDUCATION", "PROJECTS", "CERTIFICATIONS", "ACHIEVEMENTS", "AWARDS"]
         if any(kw in line.upper() for kw in section_keywords) and len(line) < 40:
             content.append(Spacer(1, 4))
             content.append(Paragraph(clean.upper(), section_header_style))
