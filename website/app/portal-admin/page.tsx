@@ -4,7 +4,6 @@ import { useRouter } from "next/navigation";
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { authFetch, useAuth } from "@/lib/auth";
-import ThemeToggle from "@/components/ThemeToggle";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -225,7 +224,6 @@ export default function AdminPortal() {
           </div>
         </div>
         <div className="flex items-center gap-4">
-          <ThemeToggle />
           <button
             onClick={() => router.push("/dashboard")}
             className="text-xs px-4 py-2 rounded-xl border border-white/10 hover:border-[#6C63FF]/55 text-white/70 hover:text-white transition-all"

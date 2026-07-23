@@ -1,7 +1,6 @@
 "use client";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import ThemeToggle from "@/components/ThemeToggle";
 import { authFetch, useAuth } from "@/lib/auth";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -1346,7 +1345,6 @@ export default function Dashboard() {
                 Groq llama-3.3-70b ●
               </span>
             )}
-            <ThemeToggle />
             <a href="/" className="text-white/30 hover:text-white/70 text-xs transition-colors">← Home</a>
           </div>
         </header>

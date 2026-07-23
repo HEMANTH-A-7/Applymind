@@ -1,10 +1,8 @@
 import type { Metadata } from "next";
 import { Syne, Plus_Jakarta_Sans, Space_Grotesk } from "next/font/google";
 import "./globals.css";
-import { ThemeProvider } from "@/components/ThemeProvider";
 import { AuthProvider } from "@/lib/auth";
 import CookieBanner from "@/components/CookieBanner";
-import Script from "next/script";
 
 const syne = Syne({
   subsets: ["latin"],
@@ -113,36 +111,16 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={`${syne.variable} ${jakarta.variable} ${grotesk.variable}`} suppressHydrationWarning>
+    <html lang="en" className={`${syne.variable} ${jakarta.variable} ${grotesk.variable}`}>
       <head>
-        {/* Anti-FOUC: set theme before first paint */}
-        <Script
-          id="anti-fouc-theme"
-          strategy="beforeInteractive"
-          dangerouslySetInnerHTML={{
-            __html: `
-              (function() {
-                try {
-                  var saved = localStorage.getItem('applymind-theme');
-                  var preferred = saved || (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
-                  document.documentElement.setAttribute('data-theme', preferred);
-                } catch(e) {
-                  document.documentElement.setAttribute('data-theme', 'dark');
-                }
-              })();
-            `,
-          }}
-        />
         {/* IndexNow key — replace with real key after submitting */}
         <meta name="indexnow-key" content="REPLACE_WITH_INDEXNOW_KEY" />
       </head>
       <body className="font-jakarta antialiased overflow-x-hidden">
-        <ThemeProvider>
-          <AuthProvider>
-            {children}
-            <CookieBanner />
-          </AuthProvider>
-        </ThemeProvider>
+        <AuthProvider>
+          {children}
+          <CookieBanner />
+        </AuthProvider>
       </body>
     </html>
   );

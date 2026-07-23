@@ -98,7 +98,7 @@ export default function CookieBanner() {
               {[
                 {
                   name: "Essential",
-                  desc: "Authentication, session management, theme preference. Cannot be disabled.",
+                  desc: "Authentication, session management. Cannot be disabled.",
                   locked: true,
                 },
                 {

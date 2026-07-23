@@ -107,7 +107,6 @@ export default function PrivacyPage() {
           {/* 7 */}
           <Section title="7. Cookies">
             <Table rows={[
-              ["applymind-theme", "localStorage", "Session / persistent", "Stores dark/light theme preference. Essential."],
               ["applymind-cookie-consent", "localStorage", "365 days", "Records your cookie consent choices. Essential."],
               ["applymind_creds_consent", "Cookie", "30 days", "Stores your consent to store platform credentials locally. Essential."],
               ["applymind_linkedin_creds", "Cookie", "30 days", "LinkedIn credentials for auto-applying. Optional."],

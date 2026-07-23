@@ -4,7 +4,6 @@ import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import { gsap } from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
-import ThemeToggle from "./ThemeToggle";
 
 const HeroCanvas = dynamic(() => import("./HeroCanvas"), { ssr: false });
 
@@ -106,7 +105,6 @@ export default function HeroSection() {
           ))}
         </div>
         <div className="flex items-center gap-3">
-          <ThemeToggle />
           <button
             onClick={() => router.push("/dashboard")}
             className="acid-btn px-6 py-2 rounded-full font-grotesk text-xs tracking-widest uppercase"
