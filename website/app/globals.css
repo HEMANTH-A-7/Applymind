@@ -242,7 +242,7 @@ body::before {
   text-transform: uppercase;
   letter-spacing: -0.05em;
   transform: scaleX(1.1);
-  transform-origin: left;
+  transform-origin: center;
 }
 
 /* ─── Theme toggle button ─── */
