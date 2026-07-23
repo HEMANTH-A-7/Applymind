@@ -109,7 +109,7 @@ export default function StatsSection() {
       <div className="max-w-6xl mx-auto">
         <div className="mb-16 text-center">
           <p className="font-grotesk text-xs tracking-[0.4em] text-acid mb-4 uppercase">// Real Numbers</p>
-          <h2 className="font-syne font-black text-6xl md:text-8xl uppercase chrome-text distort-heading">
+          <h2 className="font-syne font-black text-[clamp(1.25rem,6vw,6rem)] uppercase chrome-text distort-heading break-words max-w-[88%] mx-auto">
             THE RESULTS
           </h2>
         </div>

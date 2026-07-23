@@ -444,10 +444,10 @@ export default function AgentConstellation() {
       {/* Section label */}
       <div className="text-center mb-16 px-4">
         <p className="font-grotesk text-xs tracking-[0.4em] text-acid mb-4 uppercase">// 9-Agent System</p>
-        <h2 className="font-syne font-black text-6xl md:text-8xl uppercase text-chrome distort-heading">
+        <h2 className="font-syne font-black text-[clamp(1.25rem,6vw,6rem)] uppercase text-chrome distort-heading break-words max-w-[88%] mx-auto">
           THE <span className="acid-text">INTELLIGENCE</span>
         </h2>
-        <h2 className="font-syne font-black text-6xl md:text-8xl uppercase outline-chrome distort-heading">
+        <h2 className="font-syne font-black text-[clamp(1.25rem,6vw,6rem)] uppercase outline-chrome distort-heading break-words max-w-[88%] mx-auto">
           ARCHITECTURE
         </h2>
       </div>

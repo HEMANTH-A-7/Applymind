@@ -75,10 +75,10 @@ export default function PricingSection() {
         {/* Header */}
         <div className="text-center mb-8">
           <p className="font-grotesk text-xs tracking-[0.4em] text-acid mb-4 uppercase">// Pricing</p>
-          <h2 className="font-syne font-black text-6xl md:text-8xl uppercase distort-heading">
+          <h2 className="font-syne font-black text-[clamp(1.25rem,6vw,6rem)] uppercase distort-heading break-words max-w-[88%] mx-auto">
             <span className="outline-chrome">CHOOSE YOUR</span>
           </h2>
-          <h2 className="font-syne font-black text-6xl md:text-8xl uppercase acid-text distort-heading -mt-4">
+          <h2 className="font-syne font-black text-[clamp(1.25rem,6vw,6rem)] uppercase acid-text distort-heading -mt-4 break-words max-w-[88%] mx-auto">
             WEAPON
           </h2>
         </div>

@@ -69,10 +69,10 @@ export default function DashboardSection() {
         {/* Section header */}
         <div className="mb-16 text-center">
           <p className="font-grotesk text-xs tracking-[0.4em] text-acid mb-4 uppercase">// Live Dashboard</p>
-          <h2 className="font-syne font-black text-6xl md:text-8xl uppercase chrome-text distort-heading">
+          <h2 className="font-syne font-black text-[clamp(1.25rem,6vw,6rem)] uppercase chrome-text distort-heading break-words max-w-[88%] mx-auto">
             WATCH IT
           </h2>
-          <h2 className="font-syne font-black text-6xl md:text-8xl uppercase outline-acid distort-heading -mt-4">
+          <h2 className="font-syne font-black text-[clamp(1.25rem,6vw,6rem)] uppercase outline-acid distort-heading -mt-4 break-words max-w-[88%] mx-auto">
             WORK
           </h2>
         </div>

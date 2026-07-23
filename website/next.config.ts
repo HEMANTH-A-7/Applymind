@@ -47,12 +47,17 @@ const nextConfig: NextConfig = {
               "default-src 'self'",
               // unsafe-eval: required by Three.js + GSAP shader compilation
               // unsafe-inline: required by Next.js inline style injection
-              "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.googletagmanager.com https://*.sentry.io",
+              "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.googletagmanager.com https://*.sentry.io https://apis.google.com",
               "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
               "font-src 'self' https://fonts.gstatic.com",
               "img-src 'self' data: blob: https:",
               // Allow API + Firebase + Sentry connections
               `connect-src 'self' ${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"} https://*.firebaseio.com https://*.googleapis.com https://*.sentry.io wss://*.firebaseio.com`,
+              // Google Sign-In (signInWithPopup) needs to load Firebase's cross-origin
+              // auth-handshake iframe from the authDomain — with no frame-src, CSP falls
+              // back to default-src 'self' and silently blocks it, so the popup closes
+              // after Google consent but the result never reaches the app.
+              "frame-src 'self' https://*.firebaseapp.com https://accounts.google.com",
               "worker-src 'self' blob:",
               "frame-ancestors 'none'",
               "base-uri 'self'",
